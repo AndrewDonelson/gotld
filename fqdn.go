@@ -21,7 +21,7 @@ type FQDN struct {
 }
 
 // newFQDN create a new default FQDN Manager
-func newFQDN() *FQDN {
+func newFQDN() (*FQDN, error) {
 	fqdn := &FQDN{}
 	fqdn.Options = &Options{}
 	for i := 0; i < eTLDGroupMax; i++ {
@@ -29,12 +29,9 @@ func newFQDN() *FQDN {
 	}	
 
 	// First step: Get the latest list - dont continue without it
-	err := fqdn.downloadPublicSuffixFile()
-	if err != nil {
-		panic(err)
-	}
+	err := fqdn.downloadPublicSuffixFile(publicSufficFileURL)
 
-	return fqdn
+	return fqdn, err
 }
 
 // Tidy will tally the total numbe rof loaded eTLDs and sort each list
@@ -171,54 +168,64 @@ func (f *FQDN) GetFQDN(srcurl string) (str string, err error) {
 
 // DownloadPublicSuffixFile will download a url to a local file. It's efficient because it will
 // write as it downloads and not load the whole file into memory.
-func (f *FQDN) downloadPublicSuffixFile() error {
+func (f *FQDN) downloadPublicSuffixFile(file string) error {
 	var icann bool
 
+	if len(file) <= 0 {
+		file = publicSufficFileURL
+	}
+
 	// Get the data
-	resp, err := http.Get(publicSufficFileURL)
-	if err != nil {
-		return err
+	resp, err := http.Get(file)
+	if err != nil || resp.StatusCode != 200 {
+		return fmt.Errorf("Public Suffix file was not downloaded")
 	}
 	defer resp.Body.Close()
 
 	respData, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		panic(err)
+	if err != nil || len(respData) < 32768 {
+		return fmt.Errorf("Response data size to small for Public Suffix file")
 	}
 	sliceData := strings.Split(string(respData), "\n")
 
-	for _, tld := range sliceData {
+	if len(sliceData) > 0 {
+		if !strings.Contains(sliceData[4],publicSufficFileURL) {
+			return fmt.Errorf("File is not the Public Suffix Data File")
+		}
 
-		// Skip blank lines and comments
-		if len(tld) > 0 {
+		for _, tld := range sliceData {
+			// Skip blank lines and comments
+			if len(tld) > 0 {
+		
+				// detect and toggle icann eTLD state
+				if strings.Contains(tld,"===BEGIN ICANN DOMAINS===") {
+					icann = true
+				} else if strings.Contains(tld,"===END ICANN DOMAINS===") {
+					icann = false
+				}
 	
-			// detect and toggle icann eTLD state
-			if strings.Contains(tld,"===BEGIN ICANN DOMAINS===") {
-				icann = true
-			} else if strings.Contains(tld,"===END ICANN DOMAINS===") {
-				icann = false
-			}
-
-			// if private tlds not allowed and this is not icann tld
-			// skip it
-			if !f.Options.AllowPrivateTLDs && !icann {
-				continue
-			}
-			
-			// If this is not a comment - continue processing
-			if !strings.HasPrefix(tld, "//") {
-				if !strings.HasPrefix(tld, "*") {
-					if !strings.HasPrefix(tld, "!") {
-						// Add eTLD to list
-						dots := strings.Count(tld,".")
-						tld = strings.ToLower(strings.TrimSpace(tld))
-						f.etldList[dots].Add(tld,false)			
-					}	
+				// if private tlds not allowed and this is not icann tld
+				// skip it
+				if !f.Options.AllowPrivateTLDs && !icann {
+					continue
+				}
+				
+				// If this is not a comment - continue processing
+				if !strings.HasPrefix(tld, "//") {
+					if !strings.HasPrefix(tld, "*") {
+						if !strings.HasPrefix(tld, "!") {
+							// Add eTLD to list
+							dots := strings.Count(tld,".")
+							tld = strings.ToLower(strings.TrimSpace(tld))
+							f.etldList[dots].Add(tld,false)			
+						}	
+					}
 				}
 			}
 		}
+	
+		f.Tidy()	
 	}
 
-	f.Tidy()
 	return nil
 }

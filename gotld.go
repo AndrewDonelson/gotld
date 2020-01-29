@@ -14,5 +14,5 @@ var (
 )
 
 func init() {
-	FQDNMgr = newFQDN()
+	FQDNMgr,_ = newFQDN()
 }
