@@ -132,10 +132,10 @@ func (f *FQDN) GetFQDN(srcurl string) (str string, err error) {
 		srcurl = "fake://" + srcurl
 	}
 
-	url, err := url.Parse(srcurl)
+	url, _ := url.Parse(srcurl)
 
 	// We dont need scheme anymore - get rid of it
-	srcurl, yes = f.hasScheme(srcurl,true)
+	srcurl, _ = f.hasScheme(srcurl,true)
 
 	if url.Port() != "" {
 		srcurl = strings.Replace(srcurl, ":"+url.Port(), "", -1)
