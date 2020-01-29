@@ -19,16 +19,9 @@ func main() {
 		"http://a.very.complex-domain.co.uk:8080/foo/bar",
 	}
 
-	println("Parse()")
+	println("Example #1")
 	for _, url := range urls {
-		u, _ := tld.Parse(url)
-		fmt.Printf("%47s = sch[%s] sub[%s] dom[%s] tld[%s] prt[%s] pth[%s] qry[%s] fqdn[%s]\n",
-			u, u.Scheme, u.Subdomain, u.Domain, u.TLD, u.Port, u.Path, u.RawQuery,u.FQDN)
+		u, _ := tld.FQDNMgr.GetFQDN(url)
+		fmt.Printf("%47s = fqdn[%s]\n", url, u)
 	}
-
-	println("\nGetFQDN()")
-	for _, url := range urls {
-		u, _ := tld.GetFQDN(url)
-		fmt.Printf("%47s = %s\n", url, u)
-	}	
 }

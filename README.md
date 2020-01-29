@@ -41,44 +41,26 @@ func main() {
 		"http://a.very.complex-domain.co.uk:8080/foo/bar",
 	}
 
-	println("Parse()")
+	println("Example #1")
 	for _, url := range urls {
-		u, _ := tld.Parse(url)
-		fmt.Printf("%47s = sch[%s] sub[%s] dom[%s] tld[%s] prt[%s] pth[%s] qry[%s] fqdn[%s]\n",
-			u, u.Scheme, u.Subdomain, u.Domain, u.TLD, u.Port, u.Path, u.RawQuery,u.FQDN)
+		u, _ := tld.FQDNMgr.GetFQDN(url)
+		fmt.Printf("%47s = fqdn[%s]\n", url, u)
 	}
-
-	println("\nGetFQDN()")
-	for _, url := range urls {
-		u, _ := tld.GetFQDN(url)
-		fmt.Printf("%47s = %s\n", url, u)
-	}	
 }
 ```
 
 ```sh
 $ go run main.go
-Parse()
-                                    //nlaak.com = sch[] sub[] dom[nlaak] tld[com] prt[] pth[] qry[] fqdn[nlaak.com]
-                              https://nlaak.com = sch[https] sub[] dom[nlaak] tld[com] prt[] pth[] qry[] fqdn[nlaak.com]
-                          http://go.com?foo=bar = sch[http] sub[] dom[go] tld[com] prt[] pth[] qry[foo=bar] fqdn[go.com]
-                              http://google.com = sch[http] sub[] dom[google] tld[com] prt[] pth[] qry[] fqdn[google.com]
-                             http://blog.google = sch[http] sub[] dom[blog] tld[google] prt[] pth[] qry[] fqdn[blog.google]
-                   https://www.medi-cal.ca.gov/ = sch[https] sub[www.medi-cal] dom[ca] tld[gov] prt[] pth[/] qry[] fqdn[ca.gov]
-                             https://ato.gov.au = sch[https] sub[] dom[ato] tld[gov.au] prt[] pth[] qry[] fqdn[ato.gov.au]
-                http://stage.host.domain.co.uk/ = sch[http] sub[stage.host] dom[domain] tld[co.uk] prt[] pth[/] qry[] fqdn[domain.co.uk]
-http://a.very.complex-domain.co.uk:8080/foo/bar = sch[http] sub[a.very] dom[complex-domain] tld[co.uk] prt[8080] pth[/foo/bar] qry[] fqdn[complex-domain.co.uk]
-
-GetFQDN()
-                                      nlaak.com = nlaak.com
-                              https://nlaak.com = nlaak.com
-                          http://go.com?foo=bar = go.com
-                              http://google.com = google.com
-                             http://blog.google = blog.google
-                   https://www.medi-cal.ca.gov/ = ca.gov
-                             https://ato.gov.au = ato.gov.au
-                http://stage.host.domain.co.uk/ = domain.co.uk
-http://a.very.complex-domain.co.uk:8080/foo/bar = complex-domain.co.uk
+Example #1
+                                      nlaak.com = fqdn[nlaak.com]
+                              https://nlaak.com = fqdn[nlaak.com]
+                          http://go.com?foo=bar = fqdn[go.com]
+                              http://google.com = fqdn[google.com]
+                             http://blog.google = fqdn[blog.google]
+                   https://www.medi-cal.ca.gov/ = fqdn[ca.gov]
+                             https://ato.gov.au = fqdn[ato.gov.au]
+                http://stage.host.domain.co.uk/ = fqdn[domain.co.uk]
+http://a.very.complex-domain.co.uk:8080/foo/bar = fqdn[complex-domain.co.uk]
 ```
 
 ### MIT License
