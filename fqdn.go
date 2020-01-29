@@ -20,6 +20,7 @@ type FQDN struct {
 	total 		int		// total combined amount of eTLDs
 }
 
+// newFQDN create a new default FQDN Manager
 func newFQDN() *FQDN {
 	fqdn := &FQDN{}
 	fqdn.Options = &Options{}
@@ -28,10 +29,15 @@ func newFQDN() *FQDN {
 	}	
 
 	// First step: Get the latest list - dont continue without it
-	fqdn.downloadPublicSuffixFile()
+	err := fqdn.downloadPublicSuffixFile()
+	if err != nil {
+		panic(err)
+	}
+
 	return fqdn
 }
 
+// Tidy will tally the total numbe rof loaded eTLDs and sort each list
 func (f *FQDN) Tidy() {
 	f.total = 0
 	for i := 0; i < eTLDGroupMax; i++ {
@@ -81,7 +87,7 @@ func (f *FQDN) guess(url string, count int) (string,error) {
 		} else if count == (eTLDGroupMax - 3) {
 			return fmt.Sprintf("%s.%s",groups[grpCnt-2],groups[grpCnt-1]), nil
 		} else if count == (eTLDGroupMax - 4) {
-			return fmt.Sprintf("%s",groups[grpCnt-1]), nil
+			return groups[grpCnt-1], nil
 		}		
 	}
 
@@ -111,6 +117,8 @@ func  (f *FQDN) findTLD(s string) string {
 	return tld
 }
 
+// GetFQDN given a valid url will attempt to detect & return the eTLD
+// using the loaded public suffix list
 func (f *FQDN) GetFQDN(srcurl string) (str string, err error) {
 
 	// shortest domain ex. a.io (4), and must have at least 1 DOT
