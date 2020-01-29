@@ -81,13 +81,9 @@ GetFQDN()
 http://a.very.complex-domain.co.uk:8080/foo/bar = complex-domain.co.uk
 ```
 
-## Package Info
-
-gotld is a fork of go-tld by Andrew Donelson &lt;me@andrewdoenlson.com&gt;
-
 ### MIT License
 
-Copyright © 2019 Jaime Pillora &lt;dev@jpillora.com&gt;
+Copyright © 2020 Andrew Donelson &lt;me@andrewdonelson.com&gt;
 
 Permission is hereby granted, free of charge, to any person obtaining
 a copy of this software and associated documentation files (the
