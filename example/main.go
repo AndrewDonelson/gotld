@@ -21,7 +21,7 @@ func main() {
 
 	println("Example #1")
 	for _, url := range urls {
-		u, _ := tld.FQDNMgr.GetFQDN(url)
+		u, _ := gotld.FQDNMgr.GetFQDN(url)
 		fmt.Printf("%47s = fqdn[%s]\n", url, u)
 	}
 }

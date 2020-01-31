@@ -1,4 +1,4 @@
-package tld
+package gotld
 
 const (
 	eTLDGroupMax		= 5
@@ -16,3 +16,17 @@ var (
 func init() {
 	FQDNMgr,_ = newFQDN()
 }
+
+// func ValidateOrigin(origin string) bool {
+// 	u, err := FQDNMgr.GetFQDN(origin)
+// 	if err != nil {
+// 		return false
+// 	}
+
+// 	allow := util.StringArrayContains(AllowedOrigins, u)
+// 	if !allow {
+// 		return false
+// 	}
+
+// 	return true
+// }
