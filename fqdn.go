@@ -1,4 +1,4 @@
-package tld
+package gotld
 
 import (
 	"fmt"
