@@ -129,8 +129,11 @@ func (f *FQDN) GetFQDN(srcurl string) (str string, err error) {
 		srcurl = "fake://" + srcurl
 	}
 
-	url, _ := url.Parse(srcurl)
-
+	url, err := url.Parse(srcurl)
+	if err != nil {
+		err = fmt.Errorf("Error: url.parse: %v",err)
+	}
+	
 	// We dont need scheme anymore - get rid of it
 	srcurl, _ = f.hasScheme(srcurl,true)
 

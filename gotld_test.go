@@ -2,6 +2,46 @@ package gotld
 
 import "testing"
 
+//strArray := [5]string{"India", "Canada", "Japan", "Germany", "Italy"}
+var CXHOSTS = []string{
+	"abril.ntwk50.com",
+	"acmeair.incentivenetworks.com",
+	"acmegrocer.incentivenetworks.com",
+	"acuonline.bankmyrewards.com",
+	"acuonline.eversave.com",
+	"affinion.ntwk50.com",
+	"ba.shopping.base.com",
+	"base.treatstreet.stage.com",
+	"base1.incentivenetworks.com",
+	"base2.incentivenetworks.com",
+	"base3.incentivenetworks.com",
+	"base4.incentivenetworks.com",
+	"base5.incentivenetworks.com",
+	"bauk.incentivenetworks.com",
+	"baus.incentivenetworks.com",
+	"bestbank.bankmyrewards.com",
+	"bestbank.eversave.com",
+	"blackbird.eversave.com",
+	"bonuspointsmall.anzrewards.com",
+	"cadencebank.bankmyrewards.com",
+	"cadencebank.eversave.com",
+	"candfonline.bankmyrewards.com",
+	"careOne.mymembersmarketplace.com",
+	"cashback.achatvipservices.com",
+	"cashback.acquistierisparmi.it",
+	"cashback.alitalia.com",
+	"cashback.beneficiosonline.com.mx",
+	"cashback.bilevip.com",
+	"cashback.butwaitsavemore.com",
+	"cashback.buyerassurance.com",
+	"cashback.cafepressclub.com",
+	"cashback.completehome.com",
+	"cashback.completesavings.co.uk",
+	"cashback.completesavings.ie",
+	"cashback.compraevolta.com.br",
+	"cashback.designerdealsclub.com",	
+}
+
 func Test1(t *testing.T) {
 	var src string
 	
@@ -57,6 +97,14 @@ func Test1(t *testing.T) {
 		t.Fail()
 	}
 
+	for _, src = range CXHOSTS {
+		u, err = FQDNMgr.GetFQDN(src)
+		if err != nil {
+			t.Fail()
+		}			
+	}
+
+
 }
 
 func TestELD(t *testing.T) {
@@ -109,3 +157,4 @@ func TestFileFail(t *testing.T) {
 	}	
 	
 }
+
