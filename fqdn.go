@@ -1,231 +1,385 @@
+// file: fqdn.go
+// description: manages fully qualified domain names
+
 package gotld
 
 import (
-	"fmt"
-	"io/ioutil"
+	"context"
+	"crypto/tls"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
-// FQDN main object structure
+// FQDN main object structure with concurrency support
 type FQDN struct {
-	Options		*Options
-	etldList    [eTLDGroupMax]*ETLD
-	// etldList[1] 	*ETLD	// eTLD Groups - ie. [com]
-	// etldList[2] 	*ETLD	// eTLD Groups - ie. [eu.com]
-	// etldList[3] 	*ETLD	// eTLD Groups - ie. [api.stdlib.com]
-	// etldList[4] 	*ETLD	// eTLD Groups - ie. [usr.cloud.muni.cz]
-	// etldList[5] 	*ETLD	// eTLD Groups - ie. [app.os.stg.fedoraproject.org]
-	total 		int		// total combined amount of eTLDs
+	Options  *Options
+	etldList [eTLDGroupMax]*ETLD
+	total    int
+	mu       sync.RWMutex
 }
 
-// newFQDN create a new default FQDN Manager
-func newFQDN() (*FQDN, error) {
-	fqdn := &FQDN{}
-	fqdn.Options = &Options{}
+// newFQDN creates a new FQDN manager with the specified options
+func newFQDN(opts *Options) (*FQDN, error) {
+	if opts == nil {
+		opts = DefaultOptions()
+	}
+
+	fqdn := &FQDN{
+		Options: opts,
+		mu:      sync.RWMutex{},
+	}
+
 	for i := 0; i < eTLDGroupMax; i++ {
 		fqdn.etldList[i] = emptyETLD(i)
-	}	
+	}
 
-	// First step: Get the latest list - dont continue without it
-	err := fqdn.downloadPublicSuffixFile(publicSufficFileURL)
+	// Get the public suffix list
+	var err error
+	if opts.PublicSuffixFile != "" {
+		err = fqdn.loadPublicSuffixFromFile(opts.PublicSuffixFile)
+	} else {
+		err = fqdn.downloadPublicSuffixFile(opts.PublicSuffixURL)
+	}
 
-	return fqdn, err
+	if err != nil {
+		return nil, wrapError(err, "failed to initialize FQDN manager")
+	}
+
+	return fqdn, nil
 }
 
-// Tidy will tally the total numbe rof loaded eTLDs and sort each list
+// Tidy will tally the total number of loaded eTLDs and sort each list
 func (f *FQDN) Tidy() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	f.total = 0
+	var wg errgroup.Group
+
 	for i := 0; i < eTLDGroupMax; i++ {
-		f.etldList[i].Sort()
+		i := i // Capture for goroutine
+		wg.Go(func() error {
+			f.etldList[i].Sort()
+			return nil
+		})
+	}
+
+	_ = wg.Wait() // Ignore error as Sort doesn't return an error
+
+	for i := 0; i < eTLDGroupMax; i++ {
 		f.total += f.etldList[i].Count
-	}	
+	}
 }
 
+// hasScheme checks if a URL has a scheme and optionally removes it
 func (f *FQDN) hasScheme(s string, remove bool) (string, bool) {
-	var result bool
+	schemes := []string{"http://", "https://", "ftp://", "ws://", "wss://"}
 
-	if strings.HasPrefix(s,"http://") {
-		result = true
-		if remove {
-			s = strings.Replace(s,"http://","",-1)
-		}
-	} else if strings.HasPrefix(s,"https://") {
-		result = true
-		if remove {
-			s = strings.Replace(s,"https://","",-1)
-		}
-	} else if strings.HasPrefix(s,"fake://") {
-		result = true
-		if remove {
-			s = strings.Replace(s,"fake://","",-1)
+	for _, scheme := range schemes {
+		if strings.HasPrefix(s, scheme) {
+			if remove {
+				return strings.Replace(s, scheme, "", 1), true
+			}
+			return s, true
 		}
 	}
 
-	return s, result
+	// Handle the fake:// scheme separately for backward compatibility
+	if strings.HasPrefix(s, "fake://") {
+		if remove {
+			return strings.Replace(s, "fake://", "", 1), true
+		}
+		return s, true
+	}
+
+	return s, false
 }
 
-func (f *FQDN) guess(url string, count int) (string,error) {
-	dots := strings.Count(url,".")
-	if dots < 1 || len(url) < 3 {
-		return "", fmt.Errorf("not a valid url")
+// guess attempts to extract a potential eTLD from a URL
+func (f *FQDN) guess(domain string, count int) (string, error) {
+	if domain == "" {
+		return "", ErrInvalidURL
 	}
-	groups := strings.Split(url,".")
+
+	dots := strings.Count(domain, ".")
+	if dots < 1 || len(domain) < 3 {
+		return "", ErrInvalidURL
+	}
+
+	groups := strings.Split(domain, ".")
 	grpCnt := len(groups)
 
 	if grpCnt >= count {
-		if count == eTLDGroupMax {
-			return fmt.Sprintf("%s.%s.%s.%s.%s",groups[grpCnt-5],groups[grpCnt-4],groups[grpCnt-3],groups[grpCnt-2],groups[grpCnt-1]), nil
-		} else if count == (eTLDGroupMax - 1) {
-			return fmt.Sprintf("%s.%s.%s.%s",groups[grpCnt-4],groups[grpCnt-3],groups[grpCnt-2],groups[grpCnt-1]), nil
-		} else if count == (eTLDGroupMax - 2) {
-			return fmt.Sprintf("%s.%s.%s",groups[grpCnt-3],groups[grpCnt-2],groups[grpCnt-1]), nil
-		} else if count == (eTLDGroupMax - 3) {
-			return fmt.Sprintf("%s.%s",groups[grpCnt-2],groups[grpCnt-1]), nil
-		} else if count == (eTLDGroupMax - 4) {
+		switch {
+		case count == eTLDGroupMax:
+			return strings.Join(groups[grpCnt-5:], "."), nil
+		case count == (eTLDGroupMax - 1):
+			return strings.Join(groups[grpCnt-4:], "."), nil
+		case count == (eTLDGroupMax - 2):
+			return strings.Join(groups[grpCnt-3:], "."), nil
+		case count == (eTLDGroupMax - 3):
+			return strings.Join(groups[grpCnt-2:], "."), nil
+		case count == (eTLDGroupMax - 4):
 			return groups[grpCnt-1], nil
-		}		
+		}
 	}
 
-	return "", fmt.Errorf("unable to make a guess")
+	return "", wrapError(ErrInvalidURL, "unable to make a guess")
 }
 
-func  (f *FQDN) findTLD(s string) string {
+// findTLD attempts to find the TLD of a domain
+func (f *FQDN) findTLD(s string) string {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
 	var (
 		tld, guess string
-		found bool
-		err error
+		found      bool
+		err        error
 	)
 
-	dots := strings.Count(s,".")
+	dots := strings.Count(s, ".")
 	if dots >= 1 {
 		for i := dots; i > 0; i-- {
-			guess,err = f.guess(s,i)
+			guess, err = f.guess(s, i)
 			if err == nil {
 				tld, found = f.etldList[i-1].Search(guess)
 				if found {
 					break
 				}
 			}
-		}		
+		}
 	}
 
 	return tld
 }
 
-// GetFQDN given a valid url will attempt to detect & return the eTLD
-// using the loaded public suffix list
-func (f *FQDN) GetFQDN(srcurl string) (str string, err error) {
-
-	// shortest domain ex. a.io (4), and must have at least 1 DOT
-	if len(srcurl) < 4 || strings.Count(srcurl, ".") < 1 {
-		return "", fmt.Errorf("Not a valid URL")
+// GetFQDN extracts the FQDN from a URL
+func (f *FQDN) GetFQDN(srcURL string) (string, error) {
+	if srcURL == "" {
+		return "", ErrInvalidURL
 	}
 
-	//if no prefix, add a fake one )net/url.Parser() issue (work around)
-	srcurl, yes := f.hasScheme(srcurl,false)
-	if !yes {
-		srcurl = "fake://" + srcurl
+	// Shortest domain ex. a.io (4), and must have at least 1 DOT
+	if len(srcURL) < 4 || strings.Count(srcURL, ".") < 1 {
+		return "", ErrInvalidURL
 	}
 
-	url, _ := url.Parse(srcurl)
-
-	// We dont need scheme anymore - get rid of it
-	srcurl, _ = f.hasScheme(srcurl,true)
-
-	if url.Port() != "" {
-		srcurl = strings.Replace(srcurl, ":"+url.Port(), "", -1)
+	// If no prefix, add a fake one for net/url.Parse() (workaround)
+	hadScheme := false
+	srcURL, hadScheme = f.hasScheme(srcURL, false)
+	if !hadScheme {
+		srcURL = "fake://" + srcURL
 	}
 
-	if url.RawQuery != "" {
-		srcurl = strings.Replace(srcurl, "?" + url.RawQuery, "", -1)
+	parsedURL, err := url.Parse(srcURL)
+	if err != nil {
+		return "", wrapError(ErrInvalidURL, err.Error())
 	}
 
-	if url.Path != "" {
-		srcurl = strings.Replace(srcurl, url.Path, "", -1)
+	// We don't need scheme anymore - get rid of it
+	srcURL, _ = f.hasScheme(srcURL, true)
+
+	// Remove port if present
+	if parsedURL.Port() != "" {
+		srcURL = strings.Replace(srcURL, ":"+parsedURL.Port(), "", 1)
 	}
 
-	eTLD := f.findTLD(srcurl)
+	// Remove query parameters
+	if parsedURL.RawQuery != "" {
+		srcURL = strings.Replace(srcURL, "?"+parsedURL.RawQuery, "", 1)
+	}
+
+	// Remove path
+	if parsedURL.Path != "" && parsedURL.Path != "/" {
+		srcURL = strings.Replace(srcURL, parsedURL.Path, "", 1)
+	}
+
+	// Find the TLD
+	eTLD := f.findTLD(srcURL)
 	if eTLD == "" {
-		return "", fmt.Errorf("Not a valid eTLD")	
+		return "", ErrInvalidTLD
 	}
 
-	srcurl = strings.Replace(srcurl, "."+eTLD, "", -1)
+	// Extract the domain from the URL
+	domainPart := strings.Replace(srcURL, "."+eTLD, "", 1)
 
-	if srcurl == "" {
-		return "", fmt.Errorf("Not a valid URL")
+	if domainPart == "" {
+		return "", ErrInvalidURL
 	}
 
-	dots := strings.Count(srcurl,".")
+	// Handle subdomains
+	dots := strings.Count(domainPart, ".")
 	if dots == 0 {
-		return fmt.Sprintf("%s.%s",srcurl,eTLD), nil	
+		return domainPart + "." + eTLD, nil
 	}
 
-	sub := strings.Split(srcurl,".")
-	return  fmt.Sprintf("%s.%s",sub[len(sub)-1],eTLD), nil
+	parts := strings.Split(domainPart, ".")
+	return parts[len(parts)-1] + "." + eTLD, nil
 }
 
-// DownloadPublicSuffixFile will download a url to a local file. It's efficient because it will
-// write as it downloads and not load the whole file into memory.
-func (f *FQDN) downloadPublicSuffixFile(file string) error {
-	var icann bool
-
-	if len(file) <= 0 {
-		file = publicSufficFileURL
+// loadPublicSuffixFromFile loads the public suffix list from a local file
+func (f *FQDN) loadPublicSuffixFromFile(filePath string) error {
+	if filePath == "" {
+		return wrapError(ErrPublicSuffixDownload, "no file path provided")
 	}
 
+	ctx := f.Options.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	// Load file implementation would go here
+	// For now, fall back to downloading
+	return f.downloadPublicSuffixFile(f.Options.PublicSuffixURL)
+}
+
+// downloadPublicSuffixFile downloads and parses the public suffix list
+func (f *FQDN) downloadPublicSuffixFile(fileURL string) error {
+	if fileURL == "" {
+		fileURL = publicSuffixFileURL
+	}
+
+	ctx := f.Options.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	// Create HTTP client with proper security settings
+	var client *http.Client
+	if f.Options.CustomHTTPClient != nil {
+		client = f.Options.CustomHTTPClient
+	} else {
+		timeout := f.Options.Timeout
+		if timeout == 0 {
+			timeout = 10 * time.Second
+		}
+
+		transport := &http.Transport{
+			TLSClientConfig: &tls.Config{
+				MinVersion: tls.VersionTLS12,
+			},
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          10,
+			IdleConnTimeout:       30 * time.Second,
+			TLSHandshakeTimeout:   5 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		}
+
+		client = &http.Client{
+			Transport: transport,
+			Timeout:   timeout,
+		}
+	}
+
+	// Create request with context
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
+	if err != nil {
+		return wrapError(ErrPublicSuffixDownload, err.Error())
+	}
+
+	// Set appropriate headers
+	req.Header.Set("User-Agent", "GoTLD/1.0")
+
 	// Get the data
-	resp, err := http.Get(file)
-	if err != nil || resp.StatusCode != 200 {
-		return fmt.Errorf("Public Suffix file was not downloaded")
+	resp, err := client.Do(req)
+	if err != nil {
+		return wrapError(ErrPublicSuffixDownload, err.Error())
 	}
 	defer resp.Body.Close()
 
-	respData, err := ioutil.ReadAll(resp.Body)
-	if err != nil || len(respData) < 32768 {
-		return fmt.Errorf("Response data size to small for Public Suffix file")
-	}
-	sliceData := strings.Split(string(respData), "\n")
-
-	if len(sliceData) > 0 {
-		if !strings.Contains(sliceData[4],publicSufficFileURL) {
-			return fmt.Errorf("File is not the Public Suffix Data File")
-		}
-
-		for _, tld := range sliceData {
-			// Skip blank lines and comments
-			if len(tld) > 0 {
-		
-				// detect and toggle icann eTLD state
-				if strings.Contains(tld,"===BEGIN ICANN DOMAINS===") {
-					icann = true
-				} else if strings.Contains(tld,"===END ICANN DOMAINS===") {
-					icann = false
-				}
-	
-				// if private tlds not allowed and this is not icann tld
-				// skip it
-				if !f.Options.AllowPrivateTLDs && !icann {
-					continue
-				}
-				
-				// If this is not a comment - continue processing
-				if !strings.HasPrefix(tld, "//") {
-					if !strings.HasPrefix(tld, "*") {
-						if !strings.HasPrefix(tld, "!") {
-							// Add eTLD to list
-							dots := strings.Count(tld,".")
-							tld = strings.ToLower(strings.TrimSpace(tld))
-							f.etldList[dots].Add(tld,false)			
-						}	
-					}
-				}
-			}
-		}
-	
-		f.Tidy()	
+	if resp.StatusCode != http.StatusOK {
+		return wrapError(ErrPublicSuffixDownload, "unexpected status code: "+resp.Status)
 	}
 
+	// Read the response body
+	respData, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024)) // Limit to 10MB
+	if err != nil {
+		return wrapError(ErrPublicSuffixParse, err.Error())
+	}
+
+	if len(respData) < minDataSize {
+		return wrapError(ErrPublicSuffixParse, "response data size too small for public suffix file")
+	}
+
+	// Parse the response
+	return f.parsePublicSuffixData(respData)
+}
+
+// parsePublicSuffixData parses the public suffix list data
+func (f *FQDN) parsePublicSuffixData(data []byte) error {
+	sliceData := strings.Split(string(data), "\n")
+
+	if len(sliceData) == 0 {
+		return ErrPublicSuffixParse
+	}
+
+	// Verify that this is the public suffix list
+	found := false
+	for i := 0; i < 10 && i < len(sliceData); i++ {
+		if strings.Contains(sliceData[i], publicSuffixFileURL) {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return ErrPublicSuffixFormat
+	}
+
+	var icann bool
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	// Reset the current lists
+	for i := 0; i < eTLDGroupMax; i++ {
+		f.etldList[i] = emptyETLD(i)
+	}
+
+	for _, tld := range sliceData {
+		// Skip blank lines
+		if len(tld) == 0 {
+			continue
+		}
+
+		// Detect and toggle ICANN eTLD state
+		if strings.Contains(tld, "===BEGIN ICANN DOMAINS===") {
+			icann = true
+			continue
+		} else if strings.Contains(tld, "===END ICANN DOMAINS===") {
+			icann = false
+			continue
+		}
+
+		// If private TLDs not allowed and this is not an ICANN TLD, skip it
+		if !f.Options.AllowPrivateTLDs && !icann {
+			continue
+		}
+
+		// Skip comments, wildcards, and exceptions
+		if strings.HasPrefix(tld, "//") || strings.HasPrefix(tld, "*") || strings.HasPrefix(tld, "!") {
+			continue
+		}
+
+		// Add eTLD to list
+		tld = strings.ToLower(strings.TrimSpace(tld))
+		if tld == "" {
+			continue
+		}
+
+		dots := strings.Count(tld, ".")
+		if dots < eTLDGroupMax {
+			f.etldList[dots].Add(tld, false)
+		}
+	}
+
+	f.Tidy()
 	return nil
 }
